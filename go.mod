@@ -1,4 +1,4 @@
-module go-telegram-bot
+module telegrambot
 
 go 1.23.0
 
