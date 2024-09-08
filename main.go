@@ -4,12 +4,17 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strconv"
 	"strings"
 	"telegrambot/services/greeting"
 	"telegrambot/services/rss"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
+
+	openai "github.com/mwazovzky/assistant"
 )
+
+const botName = "Mike"
 
 func main() {
 	bot := initBot()
@@ -23,7 +28,6 @@ func main() {
 			handle(bot, update.Message)
 		}
 	}
-
 }
 
 func initBot() *tgbotapi.BotAPI {
@@ -45,31 +49,54 @@ func handle(bot *tgbotapi.BotAPI, msg *tgbotapi.Message) {
 	switch msg.Text {
 	case "/start":
 		sendReply(bot, msg.Chat.ID, msg.MessageID, "Hello, human. AI welcomes you. What can I do for you?")
+		return
 	case "/help":
 		sendReply(bot, msg.Chat.ID, msg.MessageID, "Hello, human. AI welcomes you. Having a bad day? How can I help you?")
+		return
 	case "/habr":
 		handleRSS(bot, msg)
-	case "test":
-		sendReply(bot, msg.Chat.ID, msg.MessageID, "Testing")
-	case "bye":
-		sendReply(bot, msg.Chat.ID, msg.MessageID, "Goodbye. Have a nice day!")
+		return
 	case "heart":
 		sendReply(bot, msg.Chat.ID, msg.MessageID, "❤️")
+		return
 	case "like":
 		sendReply(bot, msg.Chat.ID, msg.MessageID, "👍")
+		return
 	case "ghost":
 		sendReply(bot, msg.Chat.ID, msg.MessageID, "👻")
+		return
 	}
 
 	if greeting.ContainsGreeting(strings.ToLower(msg.Text)) {
 		text := fmt.Sprintf("Привет, %s!", msg.From.FirstName)
 		sendReply(bot, msg.Chat.ID, msg.MessageID, text)
+		return
 	}
 
 	emoji, ok := getReaction(msg.From.UserName)
 	if ok {
 		sendReaction(bot, msg.Chat.ID, msg.MessageID, emoji)
 	}
+
+	chatId := os.Getenv("BOT_CHAT_ID")
+	botChatId, _ := strconv.ParseInt(chatId, 10, 64)
+	if msg.Chat.ID == botChatId || strings.HasPrefix(msg.Text, botName) {
+		handleQuestion(bot, msg)
+	}
+}
+
+func handleQuestion(bot *tgbotapi.BotAPI, msg *tgbotapi.Message) {
+	text := strings.TrimLeft(strings.TrimPrefix(msg.Text, "Mike"), "!, ")
+
+	apiKey := os.Getenv("OPENAI_API_KEY")
+	assistantRole := "You are a helpful assistant."
+	a := openai.NewAssistant(apiKey, assistantRole)
+	res, err := a.Ask(text)
+	if err != nil {
+		return
+	}
+
+	sendReply(bot, msg.Chat.ID, msg.MessageID, res)
 }
 
 func handleRSS(bot *tgbotapi.BotAPI, msg *tgbotapi.Message) {
