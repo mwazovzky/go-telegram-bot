@@ -4,20 +4,30 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"telegrambot/services/greeting"
 	"telegrambot/services/rss"
+	"telegrambot/services/treadsrepository"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
-
 	openai "github.com/mwazovzky/assistant"
+	openaiclient "github.com/mwazovzky/assistant/http/client"
 )
 
 const botName = "Mike"
 
+var allowedBots []string
+
 func main() {
 	bot := initBot()
+	ai := initAssistant()
+	allowedBots = []string{
+		os.Getenv("BOT_CHAT_ID"),
+		os.Getenv("TEST_CHAT_ID"),
+		os.Getenv("FAMILY_CHAT_ID"),
+	}
 
 	u := tgbotapi.NewUpdate(0)
 	u.Timeout = 60
@@ -25,9 +35,19 @@ func main() {
 
 	for update := range updates {
 		if update.Message != nil {
-			handle(bot, update.Message)
+			handle(ai, bot, update.Message)
 		}
 	}
+}
+
+func initAssistant() *openai.Assistant {
+	url := "https://api.openai.com/v1/chat/completions"
+	apiKey := os.Getenv("OPENAI_API_KEY")
+	client := openaiclient.NewOpenAiClient(url, apiKey)
+	tr := treadsrepository.NewThreadRepository()
+	role := "You are assistant."
+
+	return openai.NewAssistant(role, client, tr)
 }
 
 func initBot() *tgbotapi.BotAPI {
@@ -43,7 +63,7 @@ func initBot() *tgbotapi.BotAPI {
 	return bot
 }
 
-func handle(bot *tgbotapi.BotAPI, msg *tgbotapi.Message) {
+func handle(ai *openai.Assistant, bot *tgbotapi.BotAPI, msg *tgbotapi.Message) {
 	log.Printf("Incoming message: chat_id: %d, from: %s, text: %s\n", msg.Chat.ID, msg.From.UserName, msg.Text)
 
 	switch msg.Text {
@@ -67,32 +87,40 @@ func handle(bot *tgbotapi.BotAPI, msg *tgbotapi.Message) {
 		return
 	}
 
+	// greetings response
 	if greeting.ContainsGreeting(strings.ToLower(msg.Text)) {
 		text := fmt.Sprintf("Привет, %s!", msg.From.FirstName)
 		sendReply(bot, msg.Chat.ID, msg.MessageID, text)
 		return
 	}
 
+	// send reactions
 	emoji, ok := getReaction(msg.From.UserName)
 	if ok {
 		sendReaction(bot, msg.Chat.ID, msg.MessageID, emoji)
 	}
 
-	chatId := os.Getenv("BOT_CHAT_ID")
-	botChatId, _ := strconv.ParseInt(chatId, 10, 64)
-	if msg.Chat.ID == botChatId || strings.HasPrefix(msg.Text, botName) {
-		handleQuestion(bot, msg)
+	if slices.Contains(allowedBots, strconv.FormatInt(msg.Chat.ID, 10)) && strings.HasPrefix(msg.Text, botName) {
+		handleQuestion(ai, bot, msg)
 	}
 }
 
-func handleQuestion(bot *tgbotapi.BotAPI, msg *tgbotapi.Message) {
+func handleQuestion(ai *openai.Assistant, bot *tgbotapi.BotAPI, msg *tgbotapi.Message) {
 	text := strings.TrimLeft(strings.TrimPrefix(msg.Text, "Mike"), "!, ")
 
-	apiKey := os.Getenv("OPENAI_API_KEY")
-	assistantRole := "You are a helpful assistant."
-	a := openai.NewAssistant(apiKey, assistantRole)
-	res, err := a.Ask(text)
+	user := msg.From.UserName
+	_, err := ai.GetThread(user)
 	if err != nil {
+		err = ai.CreateThread(user)
+		if err != nil {
+			log.Println("can not get or create thread, error:", err)
+			return
+		}
+	}
+
+	res, err := ai.Post(user, text)
+	if err != nil {
+		log.Println("can not post a question, error:", err)
 		return
 	}
 
